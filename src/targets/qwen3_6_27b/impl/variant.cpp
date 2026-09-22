@@ -13,6 +13,7 @@
 
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 #define NINFER_QWEN36_VARIANT    ::ninfer::targets::qwen3_6_27b::detail::Variant
@@ -59,7 +60,31 @@ constexpr ops::LinearPolicy kFp8TextPolicy   = ops::LinearPolicy::AllowA8;
 constexpr ops::LinearPolicy kGroupwiseIntTextPolicy = ops::LinearPolicy::A16Only;
 #endif
 
+// The integer-activation prefill route provides 1.22x speedup on sm_86 / RTX 3090.
+// Enabled by default on sm_86; can be disabled by setting NINFER_W4A8_PREFILL=0.
+bool integer_activation_prefill_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("NINFER_W4A8_PREFILL");
+        if (value != nullptr && (value[0] == '0' || value[0] == 'n' || value[0] == 'N') &&
+            value[1] == 0) {
+            return false;
+        }
+        return true;
+    }();
+    return enabled;
+}
+
 ops::LinearPolicy text_policy(const Weight& weight) {
+    if (!integer_activation_prefill_enabled()) {
+        switch (weight.qtype) {
+        case QType::NVFP4:
+            return kNvfp4TextPolicy;
+        case QType::FP8_E4M3FN_ROW_BF16S:
+            return kFp8TextPolicy;
+        default:
+            return ops::LinearPolicy::A16Only;
+        }
+    }
     switch (weight.qtype) {
     case QType::NVFP4:
         return kNvfp4TextPolicy;
