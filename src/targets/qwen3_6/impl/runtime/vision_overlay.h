@@ -110,6 +110,9 @@ public:
         }
         KVLoanPlan plan = plan_kv_loan(*kv_arena_, *kv_pages_, bytes);
         if (plan.granules.empty()) { return std::nullopt; }
+        std::uint32_t total_loan_pages = 0;
+        for (const KVPageRun& run : plan.runs) { total_loan_pages += run.count; }
+        if (total_loan_pages > kv_pages_->available_pages()) { return std::nullopt; }
         for (const KVPageRun& run : plan.runs) { kv_pages_->lend_pages(run.begin, run.count); }
         if (on_change_) { on_change_(); }
         VisionWindow window;

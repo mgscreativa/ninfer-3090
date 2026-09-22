@@ -16,8 +16,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <exception>
 #include <future>
@@ -2015,12 +2017,20 @@ private:
                 finish_engine_phase(boundary, EngineHostPhase::Boundary);
             } catch (...) {
                 const std::exception_ptr error = std::current_exception();
+                try {
+                    std::rethrow_exception(error);
+                } catch (const std::exception& ex) {
+                    std::fprintf(stderr, "\n[FATAL] EngineCore worker_loop crashed: %s\n", ex.what());
+                } catch (...) {
+                    std::fprintf(stderr, "\n[FATAL] EngineCore worker_loop crashed with unknown exception\n");
+                }
                 HostPhaseMeasurement cleanup   = begin_host_phase();
                 fail_all_locked(error);
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
                 try {
                     publish_runtime_stats();
                 } catch (...) {}
+                std::raise(SIGTERM);
                 return;
             }
             execution_lock.unlock();
