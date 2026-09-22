@@ -94,6 +94,38 @@ Json final_usage(const GenerationOutcome& outcome) {
         {"inference_geo", nullptr}};
 }
 
+Json timings_json(const GenerationOutcome& outcome) {
+    const double prefill_sec = outcome.metrics.prefill_seconds;
+    const double decode_sec  = outcome.metrics.decode_seconds;
+
+    const double computed_prefill_tokens = static_cast<double>(
+        std::max(0, outcome.prompt_tokens - static_cast<int>(outcome.metrics.prefix_cache_hit_tokens)));
+    const double prompt_tokens_for_rate = (computed_prefill_tokens > 0.0)
+        ? computed_prefill_tokens
+        : static_cast<double>(outcome.prompt_tokens);
+
+    const double prompt_per_second = (prefill_sec > 0.0 && prompt_tokens_for_rate > 0.0)
+        ? (prompt_tokens_for_rate / prefill_sec)
+        : 0.0;
+
+    const double decode_tokens = static_cast<double>(outcome.completion_tokens);
+    const double predicted_per_second = (decode_sec > 0.0 && decode_tokens > 0.0)
+        ? (decode_tokens / decode_sec)
+        : 0.0;
+
+    return Json{
+        {"prompt_n", outcome.prompt_tokens},
+        {"prompt_ms", prefill_sec * 1000.0},
+        {"prompt_per_second", prompt_per_second},
+        {"predicted_n", outcome.completion_tokens},
+        {"predicted_ms", decode_sec * 1000.0},
+        {"predicted_per_second", predicted_per_second},
+        {"cache_n", outcome.metrics.prefix_cache_hit_tokens},
+        {"draft_n", outcome.metrics.speculative_draft_tokens},
+        {"draft_n_accepted", outcome.metrics.speculative_accepted_tokens},
+    };
+}
+
 Json streaming_start_usage(int input_tokens, std::optional<int> cache_read_input_tokens) {
     const int prompt = std::max(0, input_tokens);
     std::optional<int> cached;
@@ -206,7 +238,8 @@ std::string make_anthropic_messages_response(const AnthropicResponseIdentity& id
                 {"content", std::move(content)},
                 {"stop_reason", stop.reason},
                 {"stop_sequence", stop.sequence},
-                {"usage", final_usage(outcome)}}
+                {"usage", final_usage(outcome)},
+                {"timings", timings_json(outcome)}}
         .dump();
 }
 
@@ -355,7 +388,8 @@ std::vector<std::string> AnthropicMessagesStream::finish(const GenerationOutcome
     events.push_back(event("message_delta", Json{{"type", "message_delta"},
                                                  {"delta", Json{{"stop_reason", stop.reason},
                                                                 {"stop_sequence", stop.sequence}}},
-                                                 {"usage", final_usage(outcome)}}));
+                                                 {"usage", final_usage(outcome)},
+                                                 {"timings", timings_json(outcome)}}));
     events.push_back(event("message_stop", Json{{"type", "message_stop"}}));
     finished_ = true;
     return events;

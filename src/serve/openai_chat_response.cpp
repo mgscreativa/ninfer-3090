@@ -71,6 +71,38 @@ Json usage_json(const CompletionUsage& usage) {
                 {"total_tokens", usage.prompt_tokens + usage.completion_tokens}};
 }
 
+Json timings_json(const GenerationOutcome& outcome) {
+    const double prefill_sec = outcome.metrics.prefill_seconds;
+    const double decode_sec  = outcome.metrics.decode_seconds;
+
+    const double computed_prefill_tokens = static_cast<double>(
+        std::max(0, outcome.prompt_tokens - static_cast<int>(outcome.metrics.prefix_cache_hit_tokens)));
+    const double prompt_tokens_for_rate = (computed_prefill_tokens > 0.0)
+        ? computed_prefill_tokens
+        : static_cast<double>(outcome.prompt_tokens);
+
+    const double prompt_per_second = (prefill_sec > 0.0 && prompt_tokens_for_rate > 0.0)
+        ? (prompt_tokens_for_rate / prefill_sec)
+        : 0.0;
+
+    const double decode_tokens = static_cast<double>(outcome.completion_tokens);
+    const double predicted_per_second = (decode_sec > 0.0 && decode_tokens > 0.0)
+        ? (decode_tokens / decode_sec)
+        : 0.0;
+
+    return Json{
+        {"prompt_n", outcome.prompt_tokens},
+        {"prompt_ms", prefill_sec * 1000.0},
+        {"prompt_per_second", prompt_per_second},
+        {"predicted_n", outcome.completion_tokens},
+        {"predicted_ms", decode_sec * 1000.0},
+        {"predicted_per_second", predicted_per_second},
+        {"cache_n", outcome.metrics.prefix_cache_hit_tokens},
+        {"draft_n", outcome.metrics.speculative_draft_tokens},
+        {"draft_n_accepted", outcome.metrics.speculative_accepted_tokens},
+    };
+}
+
 CompletionUsage usage_from(const GenerationOutcome& outcome) {
     return CompletionUsage{
         .prompt_tokens     = outcome.prompt_tokens,
@@ -97,17 +129,20 @@ Json stream_choice(Json delta, Json finish_reason = nullptr) {
 std::string event(Json payload) { return "data: " + payload.dump() + "\n\n"; }
 
 std::string chunk(const OpenAIChatResponseIdentity& identity, Json delta, Json finish_reason,
-                  bool include_usage) {
+                  bool include_usage, const GenerationOutcome* outcome = nullptr) {
     Json payload       = base_payload(identity, "chat.completion.chunk");
     payload["choices"] = Json::array({stream_choice(std::move(delta), std::move(finish_reason))});
     if (include_usage) { payload["usage"] = nullptr; }
+    if (outcome != nullptr) { payload["timings"] = timings_json(*outcome); }
     return event(std::move(payload));
 }
 
-std::string usage_chunk(const OpenAIChatResponseIdentity& identity, const CompletionUsage& usage) {
+std::string usage_chunk(const OpenAIChatResponseIdentity& identity, const CompletionUsage& usage,
+                        const GenerationOutcome& outcome) {
     Json payload       = base_payload(identity, "chat.completion.chunk");
     payload["choices"] = Json::array();
     payload["usage"]   = usage_json(usage);
+    payload["timings"] = timings_json(outcome);
     return event(std::move(payload));
 }
 
@@ -147,7 +182,8 @@ std::string make_chat_completion_response(const OpenAIChatResponseIdentity& iden
               {"logprobs", nullptr},
               {"finish_reason",
                has_tool_calls ? Json("tool_calls") : Json(finish_reason(outcome.finish_reason))}}});
-    payload["usage"] = usage_json(usage_from(outcome));
+    payload["usage"]   = usage_json(usage_from(outcome));
+    payload["timings"] = timings_json(outcome);
     return payload.dump();
 }
 
@@ -204,12 +240,12 @@ std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outco
         const std::vector<ToolCall> calls = materialize_tool_calls(outcome.tool_calls);
         events.push_back(chunk(identity_, Json{{"tool_calls", tool_calls_json(calls, true)}},
                                nullptr, include_usage_));
-        events.push_back(chunk(identity_, Json::object(), "tool_calls", include_usage_));
+        events.push_back(chunk(identity_, Json::object(), "tool_calls", include_usage_, &outcome));
     } else {
         events.push_back(
-            chunk(identity_, Json::object(), finish_reason(outcome.finish_reason), include_usage_));
+            chunk(identity_, Json::object(), finish_reason(outcome.finish_reason), include_usage_, &outcome));
     }
-    if (include_usage_) { events.push_back(usage_chunk(identity_, usage_from(outcome))); }
+    if (include_usage_) { events.push_back(usage_chunk(identity_, usage_from(outcome), outcome)); }
     events.emplace_back("data: [DONE]\n\n");
     return events;
 }
