@@ -232,16 +232,17 @@ std::string make_anthropic_messages_response(const AnthropicResponseIdentity& id
                                       {"name", call.name},
                                       {"input", parse_tool_input(call)}});
     }
-    return OrderedJson{{"id", identity.message_id},
-                       {"type", "message"},
-                       {"role", "assistant"},
-                       {"model", identity.model},
-                       {"content", std::move(content)},
-                       {"stop_reason", stop.reason},
-                       {"stop_sequence", stop.sequence},
-                       {"usage", final_usage(outcome)},
-                       {"timings", timings_json(outcome)}}
-        .dump();
+    const StopPresentation stop = stop_presentation(outcome);
+    OrderedJson response{{"id", identity.message_id},
+                         {"type", "message"},
+                         {"role", "assistant"},
+                         {"model", identity.model},
+                         {"content", std::move(content)},
+                         {"stop_reason", stop.reason},
+                         {"stop_sequence", stop.sequence},
+                         {"usage", final_usage(outcome)}};
+    response["timings"] = timings_json(outcome);
+    return response.dump();
 }
 
 std::string make_anthropic_count_tokens_response(int input_tokens) {
